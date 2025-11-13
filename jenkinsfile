@@ -1,0 +1,69 @@
+pipeline {
+    agent any
+
+    environment {
+        IMAGE_NAME = "quantumnet"
+        DOCKER_HUB_USER = "supritragi"
+    }
+
+    stages {
+        stage('Clone Repository') {
+            steps {
+                git branch: 'main', url: 'https://github.com/Suprit57/QuantumNet.git'
+            }
+        }
+
+        stage('Build Docker Image') {
+            steps {
+                script {
+                    sh 'docker build -t $IMAGE_NAME:latest .'
+                }
+            }
+        }
+
+        stage('Test Docker Image') {
+            steps {
+                script {
+                    sh 'docker run --rm -d -p 5000:5000 $IMAGE_NAME:latest'
+                    sleep 10
+                    sh 'curl -f http://localhost:5000 || exit 1'
+                    sh 'docker stop $(docker ps -q --filter ancestor=$IMAGE_NAME:latest)'
+                }
+            }
+        }
+
+        stage('Push to Docker Hub') {
+            steps {
+                withCredentials([usernamePassword(credentialsId: 'dockerhub-credentials', usernameVariable: 'USER', passwordVariable: 'PASS')]) {
+                    sh 'echo $PASS | docker login -u $USER --password-stdin'
+                    sh 'docker tag $IMAGE_NAME:latest $USER/$IMAGE_NAME:latest'
+                    sh 'docker push $USER/$IMAGE_NAME:latest'
+                }
+            }
+        }
+
+        stage('Deploy to EC2') {
+            steps {
+                script {
+                    sh '''
+                    ssh -o StrictHostKeyChecking=no ubuntu@44.193.8.118 << EOF
+                    docker pull $DOCKER_HUB_USER/$IMAGE_NAME:latest
+                    docker stop quantumnet || true
+                    docker rm quantumnet || true
+                    docker run -d -p 5000:5000 --name quantumnet $DOCKER_HUB_USER/$IMAGE_NAME:latest
+                    EOF
+                    '''
+                }
+            }
+        }
+    }
+
+    post {
+        success {
+            echo '✅ Deployment Successful!'
+        }
+        failure {
+            echo '❌ Build/Deployment Failed!'
+        }
+    }
+}
